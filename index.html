@@ -1,0 +1,436 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Untangle the Ropes</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #1a1a24;
+            color: #ffffff;
+            font-family: 'Inter', sans-serif;
+            overflow: hidden;
+            touch-action: none; /* Prevent scrolling while dragging on mobile */
+        }
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            width: 100%;
+            position: relative;
+        }
+        canvas {
+            display: block;
+            background-color: transparent;
+            max-width: 100%;
+            max-height: 80vh;
+            border-radius: 50%;
+            box-shadow: 0 0 50px rgba(0,0,0,0.8);
+            cursor: pointer;
+        }
+        .ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            text-align: center;
+            pointer-events: none;
+        }
+        #level-text {
+            font-size: 2rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            text-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+        #message {
+            font-size: 1.2rem;
+            color: #4ade80;
+            margin-top: 5px;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.3s;
+            text-shadow: 0 2px 5px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div class="ui-layer">
+        <div id="level-text">Level 1</div>
+        <div id="message">Untangled! Next level...</div>
+    </div>
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const levelText = document.getElementById('level-text');
+    const messageEl = document.getElementById('message');
+
+    let width, height, centerX, centerY, boardRadius;
+    
+    // Game State
+    let currentLevel = 1;
+    let nodes = [];
+    let edges = [];
+    let isDragging = false;
+    let draggedNode = null;
+    let transitioning = false;
+
+    // Palette
+    const colors = [
+        '#3b82f6', // Blue
+        '#ef4444', // Red
+        '#eab308', // Yellow
+        '#f97316', // Orange
+        '#22c55e', // Green
+        '#a855f7', // Purple
+        '#14b8a6'  // Teal
+    ];
+
+    function resize() {
+        const size = Math.min(window.innerWidth * 0.9, window.innerHeight * 0.8, 600);
+        canvas.width = size;
+        canvas.height = size;
+        width = canvas.width;
+        height = canvas.height;
+        centerX = width / 2;
+        centerY = height / 2;
+        boardRadius = (width / 2) * 0.9;
+        
+        // Reposition nodes relatively if resized
+        if(nodes.length > 0) {
+            // Simple approach: reset level on big resize, or scale coordinates.
+            // For robust gameplay, we'll just re-init the level if window dramatically changes.
+        }
+    }
+
+    window.addEventListener('resize', () => {
+        const oldWidth = width;
+        resize();
+        if (oldWidth !== width) {
+            initLevel(currentLevel);
+        }
+    });
+
+    // Helper Math: CCW for line intersection
+    function ccw(A, B, C) {
+        return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
+    }
+
+    // Check if line segments AB and CD intersect
+    function intersect(A, B, C, D) {
+        // Quick bounding box check
+        if (Math.min(A.x, B.x) > Math.max(C.x, D.x) || Math.max(A.x, B.x) < Math.min(C.x, D.x) ||
+            Math.min(A.y, B.y) > Math.max(C.y, D.y) || Math.max(A.y, B.y) < Math.min(C.y, D.y)) {
+            return false;
+        }
+        // Shared node = no crossing (just touching at vertex)
+        if (A === C || A === D || B === C || B === D) return false;
+        
+        return ccw(A, C, D) !== ccw(B, C, D) && ccw(A, B, C) !== ccw(A, B, D);
+    }
+
+    function generateGraph(level) {
+        nodes = [];
+        edges = [];
+        
+        const numNodes = Math.min(4 + level, 15); // Start at 5, max 15
+        
+        // 1. Generate solvable state (points on a circle)
+        const solvablePositions = [];
+        for (let i = 0; i < numNodes; i++) {
+            const angle = (i / numNodes) * Math.PI * 2;
+            const r = boardRadius * 0.8;
+            solvablePositions.push({
+                x: centerX + r * Math.cos(angle),
+                y: centerY + r * Math.sin(angle)
+            });
+        }
+
+        // 2. Create connections (Hamiltonian cycle + random non-intersecting chords)
+        // Outer boundary to guarantee single component
+        for (let i = 0; i < numNodes; i++) {
+            edges.push({
+                u: i,
+                v: (i + 1) % numNodes,
+                color: colors[Math.floor(Math.random() * colors.length)]
+            });
+        }
+
+        // Add extra non-intersecting diagonals to make it complex
+        const extraEdges = Math.floor(level * 1.2);
+        for(let i=0; i<extraEdges; i++) {
+            let u = Math.floor(Math.random() * numNodes);
+            let v = Math.floor(Math.random() * numNodes);
+            if(u === v || Math.abs(u-v) === 1 || Math.abs(u-v) === numNodes-1) continue;
+            
+            // Check if adding this edge intersects existing edges in the *solved* state
+            let canAdd = true;
+            for(let edge of edges) {
+                if(intersect(solvablePositions[u], solvablePositions[v], solvablePositions[edge.u], solvablePositions[edge.v])) {
+                    canAdd = false;
+                    break;
+                }
+            }
+            
+            // Also check if already exists
+            const exists = edges.find(e => (e.u===u && e.v===v) || (e.u===v && e.v===u));
+            if(exists) canAdd = false;
+
+            if (canAdd) {
+                edges.push({
+                    u: u,
+                    v: v,
+                    color: colors[Math.floor(Math.random() * colors.length)]
+                });
+            }
+        }
+
+        // 3. Scramble nodes (randomize positions within inner board)
+        for (let i = 0; i < numNodes; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const r = (Math.random() * 0.7 + 0.1) * boardRadius; // Keep away from exact edge and exact center
+            nodes.push({
+                id: i,
+                x: centerX + r * Math.cos(angle),
+                y: centerY + r * Math.sin(angle),
+                vx: 0, 
+                vy: 0
+            });
+        }
+
+        // Force a tangle (if accidentally generated solved, reshuffle)
+        while(checkIntersections() === 0 && numNodes > 3) {
+            for (let i = 0; i < numNodes; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const r = (Math.random() * 0.7 + 0.1) * boardRadius;
+                nodes[i].x = centerX + r * Math.cos(angle);
+                nodes[i].y = centerY + r * Math.sin(angle);
+            }
+        }
+    }
+
+    function initLevel(level) {
+        levelText.innerText = `Level ${level}`;
+        generateGraph(level);
+        transitioning = false;
+    }
+
+    function checkIntersections() {
+        let intersectionCount = 0;
+        
+        // Reset all edges
+        edges.forEach(e => e.intersecting = false);
+
+        for (let i = 0; i < edges.length; i++) {
+            for (let j = i + 1; j < edges.length; j++) {
+                const e1 = edges[i];
+                const e2 = edges[j];
+                
+                const n1 = nodes[e1.u];
+                const n2 = nodes[e1.v];
+                const n3 = nodes[e2.u];
+                const n4 = nodes[e2.v];
+
+                if (intersect(n1, n2, n3, n4)) {
+                    e1.intersecting = true;
+                    e2.intersecting = true;
+                    intersectionCount++;
+                }
+            }
+        }
+        return intersectionCount;
+    }
+
+    // Input Handling
+    function getPointerPos(e) {
+        const rect = canvas.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        return {
+            x: (clientX - rect.left) * (canvas.width / rect.width),
+            y: (clientY - rect.top) * (canvas.height / rect.height)
+        };
+    }
+
+    function handleStart(e) {
+        if(transitioning) return;
+        const pos = getPointerPos(e);
+        
+        // Find clicked node
+        for (let node of nodes) {
+            const dx = pos.x - node.x;
+            const dy = pos.y - node.y;
+            if (dx * dx + dy * dy < 600) { // Hitbox radius squared (~24px)
+                isDragging = true;
+                draggedNode = node;
+                break;
+            }
+        }
+    }
+
+    function handleMove(e) {
+        if (isDragging && draggedNode) {
+            e.preventDefault(); // Prevent scrolling on touch devices
+            const pos = getPointerPos(e);
+            
+            // Constrain to board
+            const dx = pos.x - centerX;
+            const dy = pos.y - centerY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            
+            if (dist < boardRadius - 20) {
+                draggedNode.x = pos.x;
+                draggedNode.y = pos.y;
+            } else {
+                const angle = Math.atan2(dy, dx);
+                draggedNode.x = centerX + (boardRadius - 20) * Math.cos(angle);
+                draggedNode.y = centerY + (boardRadius - 20) * Math.sin(angle);
+            }
+        }
+    }
+
+    function handleEnd(e) {
+        isDragging = false;
+        draggedNode = null;
+        
+        // Check win condition on drop
+        if (!transitioning && checkIntersections() === 0) {
+            winLevel();
+        }
+    }
+
+    // Event Listeners
+    canvas.addEventListener('mousedown', handleStart);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleEnd);
+    
+    canvas.addEventListener('touchstart', handleStart, {passive: false});
+    window.addEventListener('touchmove', handleMove, {passive: false});
+    window.addEventListener('touchend', handleEnd);
+
+    function winLevel() {
+        transitioning = true;
+        messageEl.style.opacity = 1;
+        
+        setTimeout(() => {
+            currentLevel++;
+            initLevel(currentLevel);
+            messageEl.style.opacity = 0;
+        }, 1500);
+    }
+
+    // Render Loop
+    function draw() {
+        ctx.clearRect(0, 0, width, height);
+
+        // Draw Board Background
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, boardRadius, 0, Math.PI * 2);
+        ctx.fillStyle = '#22222a';
+        ctx.fill();
+        ctx.lineWidth = 10;
+        ctx.strokeStyle = '#111116';
+        ctx.stroke();
+
+        // Decorative concentric circles
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, boardRadius * 0.7, 0, Math.PI * 2);
+        ctx.strokeStyle = '#2a2a35';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, boardRadius * 0.4, 0, Math.PI * 2);
+        ctx.stroke();
+
+        checkIntersections(); // Update intersection states
+
+        // Draw Edges (Ropes)
+        for (let edge of edges) {
+            const n1 = nodes[edge.u];
+            const n2 = nodes[edge.v];
+            
+            ctx.beginPath();
+            ctx.moveTo(n1.x, n1.y);
+            ctx.lineTo(n2.x, n2.y);
+            
+            if (edge.intersecting) {
+                // Tangled effect
+                ctx.strokeStyle = '#ef4444'; // Red
+                ctx.lineWidth = 6;
+                ctx.shadowColor = '#ef4444';
+                ctx.shadowBlur = 10;
+                ctx.stroke();
+            } else {
+                // Untangled normal color
+                ctx.strokeStyle = edge.color;
+                ctx.lineWidth = 5;
+                ctx.shadowColor = edge.color;
+                ctx.shadowBlur = 5;
+                ctx.stroke();
+            }
+        }
+        
+        // Reset shadow for nodes
+        ctx.shadowBlur = 0;
+
+        // Draw Nodes (Pegs)
+        for (let node of nodes) {
+            // Base peg shape (Hexagon approximation)
+            ctx.beginPath();
+            const r = 14;
+            for(let i=0; i<6; i++) {
+                const angle = (i * Math.PI / 3) + Math.PI/6;
+                const px = node.x + r * Math.cos(angle);
+                const py = node.y + r * Math.sin(angle);
+                if(i===0) ctx.moveTo(px, py);
+                else ctx.lineTo(px, py);
+            }
+            ctx.closePath();
+            
+            // Styling node
+            if(node === draggedNode) {
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowColor = '#ffffff';
+                ctx.shadowBlur = 15;
+            } else {
+                ctx.fillStyle = '#cbd5e1';
+                ctx.shadowBlur = 4;
+                ctx.shadowColor = '#000';
+            }
+            
+            ctx.fill();
+            
+            // Peg center
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, 5, 0, Math.PI*2);
+            ctx.fillStyle = '#333';
+            ctx.fill();
+        }
+        ctx.shadowBlur = 0; // Reset
+
+        requestAnimationFrame(draw);
+    }
+
+    // Boot
+    resize();
+    initLevel(currentLevel);
+    requestAnimationFrame(draw);
+
+</script>
+</body>
+</html>
+```
