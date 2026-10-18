@@ -17,7 +17,7 @@
             color: #ffffff;
             font-family: 'Montserrat', sans-serif;
             overflow: hidden;
-            touch-action: none; /* Prevent scrolling while dragging on mobile */
+            touch-action: none;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -33,6 +33,7 @@
             height: 100%;
             max-width: 800px;
             max-height: 800px;
+            z-index: 10;
         }
 
         canvas {
@@ -41,44 +42,43 @@
             width: 100%;
             height: 100%;
             cursor: pointer;
-            z-index: 10;
-        }
-
-        #ui-layer {
-            position: absolute;
-            top: 20px;
-            left: 0;
-            width: 100%;
-            text-align: center;
-            pointer-events: none;
-            z-index: 20;
-        }
-
-        .status-badge {
-            display: inline-block;
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(4px);
-            padding: 8px 16px;
-            border-radius: 999px;
-            font-size: 0.875rem;
-            font-weight: bold;
-            letter-spacing: 1px;
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            transition: all 0.3s ease;
-        }
-        
-        #connection-status {
-            color: #fbbf24; /* yellow */
-        }
-        #connection-status.connected {
-            color: #4ade80; /* green */
         }
     </style>
 </head>
 <body>
 
-<div id="ui-layer">
-    <div id="connection-status" class="status-badge">Connecting to Multiplayer...</div>
+<!-- Main Menu UI -->
+<div id="main-menu" class="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+    <div class="bg-gray-900 p-8 rounded-3xl border border-gray-700 text-center max-w-sm w-full mx-4 shadow-2xl">
+        <h1 class="text-4xl font-black text-white mb-2 uppercase tracking-widest leading-tight">
+            <span class="text-yellow-400">Rope</span><br/>
+            <span class="text-green-400 text-2xl">Challenge</span>
+        </h1>
+        <p class="text-gray-400 mb-8 text-sm font-medium">Untangle all the ropes to win!</p>
+        
+        <button id="btn-local" class="w-full mb-4 bg-gray-800 hover:bg-gray-700 text-white font-bold py-4 px-6 rounded-xl border border-gray-600 transition-all shadow-lg active:scale-95">
+            Play on this device
+        </button>
+        <button id="btn-online" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 px-6 rounded-xl border border-blue-400 transition-all shadow-lg shadow-blue-900/50 active:scale-95">
+            Play Online (Multiplayer)
+        </button>
+    </div>
+</div>
+
+<!-- Multiplayer Room UI -->
+<div id="room-ui" class="hidden absolute top-6 left-1/2 -translate-x-1/2 z-40 bg-gray-900/90 backdrop-blur rounded-2xl border border-gray-700 p-4 shadow-2xl flex items-center gap-6">
+    <div class="text-sm text-left">
+        <span class="text-gray-400 block text-xs font-bold uppercase tracking-wider mb-1">Room Code</span>
+        <span id="room-code-display" class="text-2xl font-black tracking-widest text-white">---</span>
+    </div>
+    <button id="btn-copy" class="bg-blue-600 hover:bg-blue-500 py-2 px-4 rounded-xl text-sm font-bold transition-colors active:scale-95 whitespace-nowrap">
+        Copy Link
+    </button>
+</div>
+
+<!-- Connection / Toast Status -->
+<div id="toast" class="hidden absolute bottom-10 left-1/2 -translate-x-1/2 z-50 bg-gray-800 border border-gray-600 text-white px-6 py-3 rounded-full font-bold shadow-xl transition-opacity duration-300">
+    Message
 </div>
 
 <div id="game-container">
@@ -96,9 +96,7 @@
     let firebaseConfig = {};
     try {
         firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-    } catch (e) {
-        console.error("Invalid firebase config");
-    }
+    } catch (e) {}
 
     // Colors and Setup
     const THEME = {
@@ -110,14 +108,15 @@
         slots: '#0d0d0f',
         slotHighlight: '#222',
         ropeColors: [
-            { id: 'red', hex: '#ef4444', top: '#f87171', side: '#b91c1c' },
             { id: 'blue', hex: '#3b82f6', top: '#60a5fa', side: '#1d4ed8' },
             { id: 'orange', hex: '#f97316', top: '#fb923c', side: '#c2410c' },
             { id: 'purple', hex: '#a855f7', top: '#c084fc', side: '#7e22ce' },
             { id: 'teal', hex: '#14b8a6', top: '#2dd4bf', side: '#0f766e' },
             { id: 'yellow', hex: '#eab308', top: '#facc15', side: '#a16207' },
-            { id: 'pink', hex: '#ec4899', top: '#f472b6', side: '#be185d' }
-        ]
+            { id: 'pink', hex: '#ec4899', top: '#f472b6', side: '#be185d' },
+            { id: 'green', hex: '#22c55e', top: '#4ade80', side: '#15803d' }
+        ],
+        intersectRed: '#ef4444'
     };
 
     const NUM_SLOTS = 24;
@@ -129,43 +128,62 @@
     let width, height, centerX, centerY, boardRadius;
     
     let slots = [];
-    let pegs = {}; // Map of pegId -> pegData
+    let pegs = {}; 
     let user = null;
     let userId = null;
     let isConnected = false;
+    let isLocalMode = false;
     let draggingPegId = null;
     let syncThrottle = 0;
+    let boardDocRef = null;
+    let currentRoomCode = null;
 
-    // Default starting positions if board is new
+    // --- Utility & Setup ---
+    function showToast(message, duration = 3000) {
+        const toast = document.getElementById('toast');
+        toast.innerText = message;
+        toast.classList.remove('hidden');
+        toast.style.opacity = 1;
+        setTimeout(() => {
+            toast.style.opacity = 0;
+            setTimeout(() => toast.classList.add('hidden'), 300);
+        }, duration);
+    }
+
+    function generateRandomRoomCode() {
+        return Math.random().toString(36).substring(2, 6).toUpperCase();
+    }
+
     function generateInitialPegs() {
         const initialPegs = {};
-        let slotIdx = 0;
-        
+        // 1. Generate solvable (adjacent) non-intersecting layout
+        let tempPegs = [];
         for (let i = 0; i < TOTAL_ROPES; i++) {
             const colorData = THEME.ropeColors[i % THEME.ropeColors.length];
-            
-            // Peg A
-            initialPegs[`rope_${i}_A`] = {
-                id: `rope_${i}_A`,
-                ropeId: i,
-                colorId: colorData.id,
-                slot: slotIdx,
-                x: 0, y: 0, // Computed later based on slot
-                draggedBy: null
-            };
-            
-            // Peg B (put it roughly opposite)
-            const oppSlot = (slotIdx + (NUM_SLOTS / 2) + i) % NUM_SLOTS;
-            initialPegs[`rope_${i}_B`] = {
-                id: `rope_${i}_B`,
-                ropeId: i,
-                colorId: colorData.id,
-                slot: oppSlot,
+            tempPegs.push({ id: `rope_${i}_A`, ropeId: i, colorId: colorData.id, slot: i * 2 });
+            tempPegs.push({ id: `rope_${i}_B`, ropeId: i, colorId: colorData.id, slot: i * 2 + 1 });
+        }
+        
+        // 2. Shuffle slots completely to tangle the ropes
+        let availableSlots = [];
+        for (let i = 0; i < NUM_SLOTS; i++) availableSlots.push(i);
+        
+        for (let i = availableSlots.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [availableSlots[i], availableSlots[j]] = [availableSlots[j], availableSlots[i]];
+        }
+        
+        // 3. Assign
+        for (let i = 0; i < tempPegs.length; i++) {
+            const p = tempPegs[i];
+            initialPegs[p.id] = {
+                id: p.id,
+                ropeId: p.ropeId,
+                colorId: p.colorId,
+                slot: availableSlots[i],
                 x: 0, y: 0,
                 draggedBy: null
             };
-            
-            slotIdx = (slotIdx + 2) % NUM_SLOTS;
         }
         return initialPegs;
     }
@@ -173,19 +191,14 @@
     function computeSlotPositions() {
         slots = [];
         for (let i = 0; i < NUM_SLOTS; i++) {
-            const angle = (i / NUM_SLOTS) * Math.PI * 2 - Math.PI / 2; // Start top
+            const angle = (i / NUM_SLOTS) * Math.PI * 2 - Math.PI / 2;
             const r = boardRadius * 0.85;
-            slots.push({
-                index: i,
-                x: centerX + r * Math.cos(angle),
-                y: centerY + r * Math.sin(angle)
-            });
+            slots.push({ index: i, x: centerX + r * Math.cos(angle), y: centerY + r * Math.sin(angle) });
         }
     }
 
     function updatePegCoordsFromSlots() {
         for (const [id, peg] of Object.entries(pegs)) {
-            // Only update pos from slot if NO ONE is dragging it
             if (!peg.draggedBy && peg.slot >= 0 && peg.slot < slots.length) {
                 peg.x = slots[peg.slot].x;
                 peg.y = slots[peg.slot].y;
@@ -209,15 +222,38 @@
     
     window.addEventListener('resize', resize);
 
-    // --- Firebase Initialization ---
-    async function initFirebase() {
+    // --- Math: Line Intersection ---
+    function orientation(p, q, r) {
+        let val = (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+        if (Math.abs(val) < 0.001) return 0; // colinear
+        return (val > 0) ? 1 : 2; // clock or counterclock wise
+    }
+
+    function doIntersect(p1, q1, p2, q2) {
+        let o1 = orientation(p1, q1, p2);
+        let o2 = orientation(p1, q1, q2);
+        let o3 = orientation(p2, q2, p1);
+        let o4 = orientation(p2, q2, q1);
+        return (o1 !== o2 && o3 !== o4);
+    }
+
+    // --- Game Modes ---
+    function startLocalGame() {
+        document.getElementById('main-menu').classList.add('hidden');
+        isLocalMode = true;
+        userId = 'local-player';
+        pegs = generateInitialPegs();
+        resize();
+        updatePegCoordsFromSlots();
+        requestAnimationFrame(draw);
+    }
+
+    async function startOnlineGame(roomCodeToJoin = null) {
+        showToast("Connecting to server...", 5000);
+        
         if (Object.keys(firebaseConfig).length === 0) {
-            console.warn("No Firebase config provided. Running in local-only mode.");
-            pegs = generateInitialPegs();
-            resize();
-            updatePegCoordsFromSlots();
-            requestAnimationFrame(draw);
-            document.getElementById('connection-status').innerText = "Local Mode Only";
+            showToast("No server config found. Starting Local Mode.");
+            startLocalGame();
             return;
         }
 
@@ -231,68 +267,66 @@
             } else {
                 await signInAnonymously(auth);
             }
-            
             user = auth.currentUser;
             userId = user.uid;
             
-            setupMultiplayer(db);
+            // Determine Room
+            currentRoomCode = roomCodeToJoin || generateRandomRoomCode();
             
-            const statusEl = document.getElementById('connection-status');
-            statusEl.innerText = "Connected";
-            statusEl.classList.add('connected');
+            // Update URL to make it shareable
+            const newUrl = new URL(window.location.href);
+            newUrl.searchParams.set('room', currentRoomCode);
+            window.history.pushState({}, '', newUrl);
+
+            // Show UI
+            document.getElementById('main-menu').classList.add('hidden');
+            document.getElementById('room-ui').classList.remove('hidden');
+            document.getElementById('room-code-display').innerText = currentRoomCode;
+
+            // Strict Rule 1: Use specific public path
+            boardDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+            
+            // Initialize or Join
+            const docSnap = await getDoc(boardDocRef);
+            if (!docSnap.exists()) {
+                await setDoc(boardDocRef, {
+                    pegs: generateInitialPegs(),
+                    createdAt: Date.now(),
+                    lastUpdated: Date.now()
+                });
+            }
+            
+            // Sync
+            onSnapshot(boardDocRef, (snap) => {
+                if (snap.exists()) {
+                    const data = snap.data();
+                    if (data.pegs) {
+                        pegs = data.pegs;
+                        if (width) updatePegCoordsFromSlots();
+                    }
+                }
+            }, (err) => {
+                console.error("Firebase sync error:", err);
+            });
+
             isConnected = true;
-            
-            // Revert status message after a few seconds
-            setTimeout(() => {
-                statusEl.style.opacity = 0;
-            }, 3000);
+            isLocalMode = false;
+            showToast("Connected to Room " + currentRoomCode);
+            resize();
+            requestAnimationFrame(draw);
 
         } catch (error) {
             console.error("Auth error:", error);
-            document.getElementById('connection-status').innerText = "Connection Failed";
+            showToast("Connection failed. Check network.");
+            document.getElementById('main-menu').classList.remove('hidden');
         }
-    }
-
-    let boardDocRef;
-    
-    async function setupMultiplayer(db) {
-        if (!user) return;
-        
-        // Strict Rule 1: Use specific public path
-        boardDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'rope_board', 'state');
-        
-        // Check if exists, if not initialize
-        const docSnap = await getDoc(boardDocRef);
-        if (!docSnap.exists()) {
-            await setDoc(boardDocRef, {
-                pegs: generateInitialPegs(),
-                lastUpdated: Date.now()
-            });
-        }
-        
-        // Listen to changes
-        onSnapshot(boardDocRef, (docSnap) => {
-            if (docSnap.exists()) {
-                const data = docSnap.data();
-                if (data.pegs) {
-                    pegs = data.pegs;
-                    // If window is ready, sync coordinates
-                    if (width) {
-                        updatePegCoordsFromSlots();
-                    }
-                }
-            }
-        }, (error) => {
-            console.error("Firebase sync error:", error);
-        });
     }
 
     async function pushStateUpdate(pegId) {
-        if (!isConnected || !boardDocRef) return;
+        if (isLocalMode) return; // No network push needed
+        if (!isConnected || !boardDocRef || !user) return;
         
-        // We only push updates for the specific peg being interacted with to avoid overwriting others
         const pegData = pegs[pegId];
-        
         const updatePayload = {};
         updatePayload[`pegs.${pegId}`] = pegData;
         updatePayload['lastUpdated'] = Date.now();
@@ -316,18 +350,18 @@
     }
 
     function handleStart(e) {
+        // Prevent interaction if menu is open
+        if (!document.getElementById('main-menu').classList.contains('hidden')) return;
+
         const pos = getPointerPos(e);
-        
-        // Find clicked peg (prioritize tops of pegs)
         let clickedPegId = null;
         let minRadius = 9999;
         
         for (const [id, peg] of Object.entries(pegs)) {
-            // Ignore if being dragged by someone else
-            if (peg.draggedBy && peg.draggedBy !== userId) continue;
+            if (!isLocalMode && peg.draggedBy && peg.draggedBy !== userId) continue;
             
             const dx = pos.x - peg.x;
-            const dy = pos.y - (peg.y - 10); // Offset for 3D top face
+            const dy = pos.y - (peg.y - 10);
             const dist = Math.sqrt(dx * dx + dy * dy);
             
             if (dist < 30 && dist < minRadius) {
@@ -352,9 +386,8 @@
             pegs[draggingPegId].x = pos.x;
             pegs[draggingPegId].y = pos.y;
             
-            // Throttle network updates for smooth dragging without spamming
             const now = Date.now();
-            if (now - syncThrottle > 100) {
+            if (now - syncThrottle > 80) {
                 pushStateUpdate(draggingPegId);
                 syncThrottle = now;
             }
@@ -363,7 +396,6 @@
 
     function handleEnd(e) {
         if (draggingPegId) {
-            // Find closest slot
             const peg = pegs[draggingPegId];
             let closestSlot = 0;
             let minDist = 99999;
@@ -379,10 +411,6 @@
                 }
             }
             
-            // Optional: check if slot is empty. If not, swap or fallback.
-            // For simplicity and sandbox nature, we allow stacking or rely on players to resolve it.
-            
-            // Snap to slot
             peg.slot = closestSlot;
             peg.x = slots[closestSlot].x;
             peg.y = slots[closestSlot].y;
@@ -396,19 +424,39 @@
     canvas.addEventListener('mousedown', handleStart);
     window.addEventListener('mousemove', handleMove, {passive: false});
     window.addEventListener('mouseup', handleEnd);
-    
     canvas.addEventListener('touchstart', handleStart, {passive: false});
     window.addEventListener('touchmove', handleMove, {passive: false});
     window.addEventListener('touchend', handleEnd);
 
-    // --- Rendering logic ---
+    // --- UI Listeners ---
+    document.getElementById('btn-local').addEventListener('click', startLocalGame);
+    document.getElementById('btn-online').addEventListener('click', () => startOnlineGame(null));
+    document.getElementById('btn-copy').addEventListener('click', () => {
+        const link = window.location.href;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(link).then(() => showToast('Invite link copied!'));
+        } else {
+            // Fallback for iframe
+            const textArea = document.createElement("textarea");
+            textArea.value = link;
+            document.body.appendChild(textArea);
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                showToast('Invite link copied!');
+            } catch (err) {
+                showToast('Failed to copy link.');
+            }
+            document.body.removeChild(textArea);
+        }
+    });
 
+    // --- Rendering ---
     function drawHexagon(ctx, x, y, radius, colorTop, colorSide, isDragging) {
-        const tiltY = 0.75; // Squash hexagon to look isometric-ish
-        const depth = isDragging ? 18 : 12; // Deeper when lifted
+        const tiltY = 0.75; 
+        const depth = isDragging ? 18 : 12; 
         const liftY = isDragging ? -8 : 0;
         
-        // Draw sides
         ctx.fillStyle = colorSide;
         ctx.beginPath();
         for (let i = 0; i <= 6; i++) {
@@ -426,7 +474,6 @@
         }
         ctx.fill();
         
-        // Draw side borders for definition
         ctx.strokeStyle = 'rgba(0,0,0,0.4)';
         ctx.lineWidth = 1;
         for (let i = 0; i < 6; i++) {
@@ -440,7 +487,6 @@
             ctx.stroke();
         }
 
-        // Draw top face
         ctx.fillStyle = colorTop;
         ctx.beginPath();
         for (let i = 0; i < 6; i++) {
@@ -452,9 +498,8 @@
         }
         ctx.closePath();
         ctx.fill();
-        ctx.stroke(); // border
+        ctx.stroke(); 
         
-        // Center hole aesthetic
         ctx.fillStyle = 'rgba(0,0,0,0.5)';
         ctx.beginPath();
         ctx.arc(x, y + liftY, radius * 0.3, 0, Math.PI * 2);
@@ -463,127 +508,29 @@
 
     function draw() {
         if (!ctx || !width) return;
-        
         ctx.clearRect(0, 0, width, height);
 
-        // 1. Draw 3D Board Base
-        // Drop Shadow
-        ctx.beginPath();
-        ctx.arc(centerX, centerY + 15, boardRadius, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(0,0,0,0.8)';
-        ctx.fill();
+        // Board Base
+        ctx.beginPath(); ctx.arc(centerX, centerY + 15, boardRadius, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fill();
 
-        // Edge/Thickness
-        ctx.beginPath();
-        ctx.arc(centerX, centerY + 10, boardRadius, 0, Math.PI * 2);
-        ctx.fillStyle = THEME.boardShadow;
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(centerX, centerY + 10, boardRadius, 0, Math.PI * 2);
+        ctx.fillStyle = THEME.boardShadow; ctx.fill();
 
-        // Top Face
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, boardRadius, 0, Math.PI * 2);
+        ctx.beginPath(); ctx.arc(centerX, centerY, boardRadius, 0, Math.PI * 2);
         const grad = ctx.createRadialGradient(centerX, centerY, boardRadius * 0.5, centerX, centerY, boardRadius);
         grad.addColorStop(0, '#26262a');
         grad.addColorStop(1, THEME.boardBase);
-        ctx.fillStyle = grad;
-        ctx.fill();
+        ctx.fillStyle = grad; ctx.fill();
         
-        // Outer rim highlight
-        ctx.lineWidth = 4;
-        ctx.strokeStyle = THEME.boardHighlight;
-        ctx.stroke();
+        ctx.lineWidth = 4; ctx.strokeStyle = THEME.boardHighlight; ctx.stroke();
+        ctx.beginPath(); ctx.arc(centerX, centerY, boardRadius * 0.65, 0, Math.PI * 2);
+        ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.03)'; ctx.stroke();
 
-        // Decorative inner rings (like the physical board)
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, boardRadius * 0.65, 0, Math.PI * 2);
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-        ctx.stroke();
-
-        // 2. Draw Board Text "ROPE CHALLENGE"
+        // Text
         ctx.save();
         ctx.translate(centerX, centerY);
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        
-        // "ROPE"
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.font = '900 ' + (boardRadius * 0.35) + 'px Montserrat';
-        // Shadow for ROPE
-        ctx.fillStyle = 'rgba(0,0,0,0.5)';
-        ctx.fillText('ROPE', 0, -boardRadius * 0.1 + 4);
-        ctx.fillStyle = THEME.textYellow;
-        ctx.fillText('ROPE', 0, -boardRadius * 0.1);
-        
-        // "CHALLENGE"
-        ctx.font = '800 ' + (boardRadius * 0.12) + 'px Montserrat';
-        ctx.letterSpacing = '2px';
-        ctx.fillStyle = THEME.textGreen;
-        ctx.fillText('CHALLENGE', 0, boardRadius * 0.15);
-        ctx.restore();
-
-        // 3. Draw Slots
-        for (let slot of slots) {
-            ctx.beginPath();
-            ctx.arc(slot.x, slot.y, 14, 0, Math.PI * 2);
-            ctx.fillStyle = THEME.slots;
-            ctx.fill();
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = THEME.slotHighlight;
-            ctx.stroke();
-            
-            // Inner deep shadow
-            ctx.beginPath();
-            ctx.arc(slot.x, slot.y, 10, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(0,0,0,0.8)';
-            ctx.fill();
-        }
-
-        // 4. Group pegs by ropeId to draw ropes between them
-        const ropes = {};
-        for (const peg of Object.values(pegs)) {
-            if (!ropes[peg.ropeId]) ropes[peg.ropeId] = [];
-            ropes[peg.ropeId].push(peg);
-        }
-
-        // Draw Ropes
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        for (const [ropeId, ropePegs] of Object.entries(ropes)) {
-            if (ropePegs.length === 2) {
-                const p1 = ropePegs[0];
-                const p2 = ropePegs[1];
-                
-                const colorData = THEME.ropeColors.find(c => c.id === p1.colorId) || THEME.ropeColors[0];
-                
-                // Rope shadow
-                ctx.beginPath();
-                ctx.moveTo(p1.x, p1.y + 10);
-                ctx.lineTo(p2.x, p2.y + 10);
-                ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-                ctx.lineWidth = 10;
-                ctx.stroke();
-                
-                // Main rope
-                ctx.beginPath();
-                ctx.moveTo(p1.x, p1.y);
-                ctx.lineTo(p2.x, p2.y);
-                ctx.strokeStyle = colorData.hex;
-                ctx.lineWidth = 8;
-                ctx.stroke();
-                
-                // Rope highlight
-                ctx.beginPath();
-                ctx.moveTo(p1.x, p1.y - 2);
-                ctx.lineTo(p2.x, p2.y - 2);
-                ctx.strokeStyle = 'rgba(255,255,255,0.3)';
-                ctx.lineWidth = 3;
-                ctx.stroke();
-            }
-        }
-
-        // 5. Draw Pegs
-        for (const peg of Object.values(pegs)) {
-            const colorData = THEME.ropeColors.find(c => c.id === peg.colorId) || THEME.ropeColors[0];
-            const isBeingDragged = (peg.draggedBy === userId) || (peg.draggedBy !== null && peg.draggedBy !== undefined);
-            
-            // Optional: Show if another player is moving it by slightly dimming
+        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillText('ROPE', 0, -boardRadius * 0.1 + 4);
+        ctx.fillStyle = THEME.textYellow; ctx.fillText('ROPE', 0, -boardRad
