@@ -533,4 +533,89 @@
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.font = '900 ' + (boardRadius * 0.35) + 'px Montserrat';
         ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillText('ROPE', 0, -boardRadius * 0.1 + 4);
-        ctx.fillStyle = THEME.textYellow; ctx.fillText('ROPE', 0, -boardRad
+        ctx.fillStyle = THEME.textYellow; ctx.fillText('ROPE', 0, -boardRadius * 0.1);
+        ctx.font = '800 ' + (boardRadius * 0.12) + 'px Montserrat';
+        ctx.letterSpacing = '2px'; ctx.fillStyle = THEME.textGreen;
+        ctx.fillText('CHALLENGE', 0, boardRadius * 0.15);
+        ctx.restore();
+
+        // Slots
+        for (let slot of slots) {
+            ctx.beginPath(); ctx.arc(slot.x, slot.y, 14, 0, Math.PI * 2);
+            ctx.fillStyle = THEME.slots; ctx.fill();
+            ctx.lineWidth = 2; ctx.strokeStyle = THEME.slotHighlight; ctx.stroke();
+            ctx.beginPath(); ctx.arc(slot.x, slot.y, 10, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fill();
+        }
+
+        // Calculate Ropes & Intersections
+        const ropes = {};
+        for (const peg of Object.values(pegs)) {
+            if (!ropes[peg.ropeId]) ropes[peg.ropeId] = [];
+            ropes[peg.ropeId].push(peg);
+        }
+
+        const lines = [];
+        for (const [ropeId, ropePegs] of Object.entries(ropes)) {
+            if (ropePegs.length === 2) {
+                lines.push({ id: ropeId, p1: ropePegs[0], p2: ropePegs[1], intersecting: false });
+            }
+        }
+
+        // Check intersections (Turns red when tangled)
+        for (let i = 0; i < lines.length; i++) {
+            for (let j = i + 1; j < lines.length; j++) {
+                if (doIntersect(lines[i].p1, lines[i].p2, lines[j].p1, lines[j].p2)) {
+                    lines[i].intersecting = true;
+                    lines[j].intersecting = true;
+                }
+            }
+        }
+
+        // Draw Ropes
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        for (const line of lines) {
+            const colorData = THEME.ropeColors.find(c => c.id === line.p1.colorId) || THEME.ropeColors[0];
+            const strokeColor = line.intersecting ? THEME.intersectRed : colorData.hex;
+            
+            // Shadow
+            ctx.beginPath(); ctx.moveTo(line.p1.x, line.p1.y + 10); ctx.lineTo(line.p2.x, line.p2.y + 10);
+            ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = 10; ctx.stroke();
+            
+            // Rope Main
+            ctx.beginPath(); ctx.moveTo(line.p1.x, line.p1.y); ctx.lineTo(line.p2.x, line.p2.y);
+            ctx.strokeStyle = strokeColor; ctx.lineWidth = 8; ctx.stroke();
+            
+            // Highlight
+            ctx.beginPath(); ctx.moveTo(line.p1.x, line.p1.y - 2); ctx.lineTo(line.p2.x, line.p2.y - 2);
+            ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 3; ctx.stroke();
+        }
+
+        // Draw Pegs
+        for (const peg of Object.values(pegs)) {
+            const colorData = THEME.ropeColors.find(c => c.id === peg.colorId) || THEME.ropeColors[0];
+            const isBeingDragged = (peg.draggedBy === userId) || (isLocalMode && peg.id === draggingPegId);
+            
+            if (!isLocalMode && peg.draggedBy && peg.draggedBy !== userId) {
+                ctx.globalAlpha = 0.7; // Dim if moved by another player
+            }
+            
+            drawHexagon(ctx, peg.x, peg.y, 22, colorData.top, colorData.side, isBeingDragged);
+            ctx.globalAlpha = 1.0;
+        }
+
+        requestAnimationFrame(draw);
+    }
+
+    // --- Init ---
+    resize();
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('room')) {
+        startOnlineGame(urlParams.get('room'));
+    }
+    
+    // We do NOT start drawing until a mode is selected, saving resources.
+</script>
+</body>
+</html>
